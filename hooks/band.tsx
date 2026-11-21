@@ -4,7 +4,7 @@ import { atom, read } from 'claude-code'
 import type { On } from 'claude-code'
 
 import type { Job, Rep, Summary } from '../types'
-import { CYBER, CYBER_PHASE, levelOf, modeTag, modeVerb, skinFor, verbOf } from './skin'
+import { CYBER, CYBER_PHASE, levelOf, modeVerb, skinFor, verbOf } from './skin'
 import { fmtDuration, IDLE_TURN, live, mixHex, PHASE_COLOR, PHASE_LABEL, plural, pulseCells } from './track'
 
 const turnAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'turn' } as const, IDLE_TURN, { shape: 'turn-1' })
@@ -14,7 +14,6 @@ const summaryAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'summary' } as co
 const frameAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'frame' } as const, 0)
 const hintAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'hint' } as const, null as string | null)
 const styleAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'style' } as const, 'classic')
-const modeAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'mode' } as const, '')
 const jobsAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'jobs' } as const, [] as Job[], { shape: 'jobs-1' })
 const repAtom = atom({ plugin: 'cc-cyberpunk-plugin', key: 'rep' } as const, { points: 0, streak: 0, lastDay: '' } as Rep, {
   shape: 'rep-1',
@@ -154,25 +153,7 @@ export function registerBand(on: On): void {
     )
   })
 
-  // ---------- cyberpunk: a mode tag on the hint line under the prompt ----------
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const skin = skinFor(await read($, styleAtom))
-    if (!skin.cyber || e.surface !== 'terminal') return next(e)
-    const line = await next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const { tag, subtitle } = modeTag(await read($, modeAtom), e.props.hint)
-    return (
-      <Box flexDirection="row">
-        <Text backgroundColor={CYBER.yellow} color={CYBER.ink} bold>
-          {` MODE//${tag} `}
-        </Text>
-        <Text color={CYBER.pink}>{` ${subtitle} `}</Text>
-        <Box flexGrow={1} flexShrink={1}>
-          {line}
-        </Box>
-      </Box>
-    )
-  })
+  // (the mode tag under the prompt was removed: the status line shows MODE in its grid)
 
   // ---------- cyberpunk: the line that closes a turn becomes a job card ----------
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {

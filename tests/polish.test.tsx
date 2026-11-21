@@ -245,7 +245,7 @@ test('/polish switches and cycles status line styles, keeping the rest of the co
   expect(await run('rainbow')).toContain('Use /polish')
 })
 
-test('the cyberpunk skin: tags, data rain, mode tag, job card, cyberdeck, shards and rep', async ($, on) => {
+test('the cyberpunk skin: tags, comet, job card, cyberdeck, shards and rep', async ($, on) => {
   const { stored, toasts, clock } = world(on)
   on('fs.read', () => ({ value: JSON.stringify({ style: 'classic' }) }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -261,7 +261,7 @@ test('the cyberpunk skin: tags, data rain, mode tag, job card, cyberdeck, shards
   expect((await edit.find({ type: 'Text', text: /^\[OK\]$/ }))?.text).toBe('[OK]')
   await edit.unmount()
 
-  // the working line: data rain with an ops count
+  // the working line: the comet with an ops count
   const spin = await $.ui.mount({
     plugin: 'cc-cyberpunk-plugin',
     surface: 'terminal',
@@ -272,29 +272,15 @@ test('the cyberpunk skin: tags, data rain, mode tag, job card, cyberdeck, shards
   expect(await spin.find({ type: 'Text', text: /[─━]/ })).toBeDefined()
   await spin.unmount()
 
-  // the mode tag on the hint line
+  // the hint line under the prompt is left as Claude Code draws it (the mode shows in the status line)
   const hint = await $.ui.mount({
     plugin: 'cc-cyberpunk-plugin',
     surface: 'terminal',
     component: 'PromptHint',
     props: { isDraft: false, isWorking: false, hint: '⏵⏵ auto mode on (shift+tab to cycle)' },
   } as never)
-  expect((await hint.find({ type: 'Text', text: /MODE\/\/AUTO/ }))?.text).toBe(' MODE//AUTO ')
+  expect(await hint.find({ type: 'Text', text: /MODE\/\// })).toBeUndefined()
   await hint.unmount()
-
-  // the mode Claude Code reports wins over the hint line's words
-  await ($ as unknown as { classic: { UserPromptSubmit: (e: object) => Promise<unknown> } }).classic.UserPromptSubmit({
-    prompt: 'plan it',
-    permission_mode: 'plan',
-  })
-  const planned = await $.ui.mount({
-    plugin: 'cc-cyberpunk-plugin',
-    surface: 'terminal',
-    component: 'PromptHint',
-    props: { isDraft: false, isWorking: false, hint: '' },
-  } as never)
-  expect((await planned.find({ type: 'Text', text: /MODE\/\// }))?.text).toBe(' MODE//RECON ')
-  await planned.unmount()
 
   // the job: rep, a transmission toast and a job card
   await clock.advance(45_000)

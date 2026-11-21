@@ -39,10 +39,10 @@ This copies the status line script to `~/.claude/cc-cyberpunk/` and points `stat
 
 ## What you get
 
-- **Status line:** model and effort level, folder, git, context and usage meters, braille trend lines, burn-rate forecasts ("limit at ~3:40 PM"), cache and budget chips. The cyberpunk style adds a NET traffic strip, daemon chips for background agents, street rep and a status ticker.
+- **Status line:** model and effort level, folder, git (with unpushed commits), context and usage meters, braille trend lines, burn-rate forecasts ("limit at ~3:40 PM"), cache and budget chips. The cyberpunk style lays its readouts out in aligned columns: segmented meters, the permission mode, a NET traffic strip, daemon chips for background agents, street rep and a status ticker, with hazard stripes that pulse in the mode's colour. Panels use the terminal's own background, so the bar blends into VS Code or any terminal theme.
 - **Working line:** a comet under Claude's spinner, coloured by what Claude is doing.
 - **Tool rows:** icons or neon `RD/` `WR/` `EX/` tags, duration, `+N −M` and exit-code chips.
-- **Around the prompt:** typing tips, a recap after each turn, a `MODE//AUTO` tag and a job-complete card under the cyberpunk style.
+- **Around the prompt:** typing tips, a recap after each turn, and a job-complete card under the cyberpunk style.
 - **Toasts:** a done toast for long turns, a context warning at 80%, budget and pacing alerts.
 - **Street rep:** points for finished jobs, edits, commands and commits, with levels and a daily streak.
 

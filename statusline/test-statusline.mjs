@@ -106,7 +106,7 @@ check('neon: idle mark and meters', /■ IDLE OPUS 5\.5.*CTX .* 10%.*5H .* 3%/.t
 const cyber = at('cyberpunk', fixtures.low).split('\n');
 check('cyberpunk: nameplate and both meters', /OPUS·5\.5/.test(cyber[0] ?? '') && /NEURAL .* 10%/.test(cyber[0] ?? '') && /BANDWIDTH .*  3%/.test(cyber[0] ?? ''));
 check('cyberpunk: reboot countdown', /REBOOT 4h4\dm/.test(cyber[0] ?? ''));
-check('cyberpunk: standby and uptime', cyber[1]?.includes('◣ STANDBY 待機') && cyber[1]?.includes('UPTIME 01:12') && cyber[1]?.includes('+120/-34 LOC'));
+check('cyberpunk: standby and uptime', cyber[1]?.includes('◣ STANDBY 待機') && cyber[1]?.includes('UPTIME 01:12'));
 check('cyberpunk: hot meter turns to a warning', /⚠ NEURAL/.test(at('cyberpunk', fixtures.highNoUsage)));
 
 // ---------- state from the mod ----------
@@ -114,7 +114,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'polish-'));
 writeFileSync(join(stateDir, 'state.json'), JSON.stringify({ lastToolFailed: true, at: Date.now(), running: true, updated: Date.now(), calls: 42 }));
 const withState = (style, env = {}) => strip(run(fixtures.low, { POLISH_STYLE: style, COLUMNS: '140', ...env }, stateDir).out);
 check('neon: LIVE while running', withState('neon').includes('▶ LIVE'));
-check('cyberpunk: jacked in, ops and breach', withState('cyberpunk').includes('◢ JACKED IN 接続中') && withState('cyberpunk').includes('OPS 42') && withState('cyberpunk').includes('BREACH'));
+check('cyberpunk: jacked in and breach', withState('cyberpunk').includes('◢ JACKED IN 接続中') && withState('cyberpunk').includes('BREACH'));
 {
   const dir = mkdtempSync(join(tmpdir(), 'polish-'));
   const minute = Math.floor(Date.now() / 60000);
@@ -128,7 +128,7 @@ check('cyberpunk: jacked in, ops and breach', withState('cyberpunk').includes('�
   check('cyberpunk: net traffic strip', line.includes('NET '));
   check('cyberpunk: daemon chip', /DAEMON·reviewer 2m/.test(line));
   check('cyberpunk: rep with streak', line.includes('REP 340 LV2 4d'));
-  check('cyberpunk: credits', line.includes('₵ 3.41'));
+  check('cyberpunk: calm line, no LOC or session ID', !line.includes(' LOC') && !line.includes('ID:'));
   check('cyberpunk: live ticker', /\/\/ (signal stable|uplink secure|packets flowing|daemons humming)/.test(line));
 }
 check('cockpit: LIVE and call count', withState('cockpit').includes('● LIVE') && withState('cockpit').includes('CALLS 42'));
@@ -176,7 +176,7 @@ check('cockpit: usage forecast', /limit ~\d{1,2}:\d\d [AP]M \(|lasts to reset/.t
     if (style !== 'minimal') {
       const wide = strip(run(withCache, { POLISH_STYLE: style, COLUMNS: '180' }, dir).out);
       check(`${style} budget chip`, /17\.50\/\$?20/.test(wide));
-      check(`${style} cache chip`, /(cache|CACHE) 99%/.test(wide));
+      if (style !== 'cyberpunk') check(`${style} cache chip`, /(cache|CACHE) 99%/.test(wide));
     }
   }
   check('cyberpunk: ICE BREACH wording', strip(run(withCache, { POLISH_STYLE: 'cyberpunk', COLUMNS: '160' }, dir).out).includes('ICE BREACH @ '));

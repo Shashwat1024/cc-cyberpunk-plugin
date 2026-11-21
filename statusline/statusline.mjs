@@ -161,7 +161,14 @@ function gitInfo(cwd, cache) {
     } catch {
       dirty = -1;
     }
-    info = { branch, dirty };
+    // commits not yet pushed; no upstream means nothing to count
+    let ahead = 0;
+    try {
+      ahead = Number.parseInt(execFileSync('git', ['rev-list', '--count', '@{u}..HEAD'], opts).trim(), 10) || 0;
+    } catch {
+      ahead = 0;
+    }
+    info = { branch, dirty, ahead };
   } catch {
     info = null;
   }
@@ -204,6 +211,16 @@ function forecast(samples, index, windowMs) {
   return (100 - v1) / ((v1 - v0) / minutes);
 }
 
+/** The new level for 45 seconds after REP crosses into it, else null. */
+function levelUp(cache, rep) {
+  if (!rep || typeof rep.level !== 'number') return null;
+  const now = Date.now();
+  const prev = cache.rep;
+  const at = prev && rep.level > prev.level ? now : prev?.upAt || 0;
+  cache.rep = { level: rep.level, upAt: at };
+  return now - at < 45_000 ? rep.level : null;
+}
+
 function hudState() {
   const state = readJson(join(DIR, 'state.json'), {});
   const fresh = state.at && Date.now() - state.at < 10 * 60 * 1000;
@@ -214,6 +231,7 @@ function hudState() {
     activity: Array.isArray(state.activity) ? state.activity : [],
     daemons: Array.isArray(state.daemons) ? state.daemons : [],
     rep: state.rep && typeof state.rep.points === 'number' ? state.rep : null,
+    mode: typeof state.mode === 'string' ? state.mode : '',
     today: state.today && typeof state.today.usd === 'number' ? state.today : null,
     budget: state.budget && typeof state.budget === 'object' ? state.budget : {},
     // a forecast still ahead, from a state written in the last 15 minutes
@@ -261,7 +279,7 @@ function effItems(d, flavor) {
   }
   if (typeof d.cacheHit === 'number') {
     const pct = Math.round(d.cacheHit * 100);
-    items.push(text(`${cyber ? 'CACHE' : 'cache'} ${pct}%`, { fg: pct >= 80 ? GREEN : pct >= 50 ? AMBER : RED, raw }, 6));
+    items.push({ ...text(`${cyber ? 'CACHE' : 'cache'} ${pct}%`, { fg: pct >= 80 ? GREEN : pct >= 50 ? AMBER : RED, raw }, 6), isCache: true });
   }
   return items;
 }
@@ -332,6 +350,13 @@ function sparkChars(values, cells) {
   return out;
 }
 
+/** The solid panel backgrounds (cyberpunk, cockpit, neon, the tape's black): drawn transparent. */
+let panels = null;
+function isPanel(key) {
+  panels ??= new Set([GRID, PANEL, VOID, [0, 0, 0]].map(c => c.join()));
+  return panels.has(key);
+}
+
 function renderCanvas(cv) {
   let out = '';
   let bgKey = '';
@@ -340,7 +365,9 @@ function renderCanvas(cv) {
   for (const cell of cv) {
     const b = cell.bg.join();
     if (b !== bgKey) {
-      out += bg(cell.bg);
+      // a panel colour is drawn as the terminal's own background (ESC[49m), so
+      // the bar blends into VS Code's grey or the terminal's black alike
+      out += isPanel(b) ? '\x1b[49m' : bg(cell.bg);
       bgKey = b;
     }
     const f = cell.fg ?? readable(cell.bg);
@@ -796,46 +823,77 @@ const CY_HAZARD_DARK = hex('#1c1a05');
  */
 const BRAILLE_LEFT = [0x01, 0x02, 0x04, 0x40];
 const BRAILLE_RIGHT = [0x08, 0x10, 0x20, 0x80];
-/**
- * The sigil, as a 12×8 dot bitmap ('#' lit), traced from the user's symbol: a
- * stem slanting down to the right, a zigzag on its upper left and another on
- * its lower right. Two status lines give only 8 dots of height, so this is the
- * closest fit; the Session pane draws it in full. Top four rows on line 1,
- * bottom four on line 2.
- */
-const SIGIL = [
-  '...#........',
-  '.####.......',
-  '#####.......',
-  '.#####......',
-  '.....#####..',
-  '......#.###.',
-  '......#####.',
-  '.......#..##',
-];
 /** Diagonal hazard stripes in braille dots, continuing from the first status line into the second. */
-function hazardChar(cellX, line) {
+function hazardChar(cellX, line, phase = 0) {
   let bits = 0;
   for (let r = 0; r < 4; r++) {
     for (let c = 0; c < 2; c++) {
       const x = cellX * 2 + c;
       const y = line * 4 + r;
-      if ((x + y) % 6 < 3) bits |= (c === 0 ? BRAILLE_LEFT : BRAILLE_RIGHT)[r];
+      if ((((x + y + phase) % 6) + 6) % 6 < 3) bits |= (c === 0 ? BRAILLE_LEFT : BRAILLE_RIGHT)[r];
     }
   }
   return String.fromCodePoint(0x2800 + bits);
 }
 
-const hazardItem = (n, line) => ({
+const hazardItem = (n, line, look = { color: CY_YELLOW, phase: 0, glitch: null }) => ({
   w: n,
   prio: 0,
   paint: (cv, col) => {
     for (let i = 0; i < n && cv[col + i]; i++) {
-      Object.assign(cv[col + i], { ch: hazardChar(i, line), fg: CY_YELLOW, bg: hex('#000000'), bold: true, dim: false, used: true });
+      const torn = look.glitch && look.glitch.line === line && look.glitch.cell === i;
+      Object.assign(cv[col + i], {
+        ch: torn ? String.fromCodePoint(0x2800 + look.glitch.bits) : hazardChar(i, line, look.phase),
+        fg: torn ? CY_PINK : look.color,
+        bg: hex('#000000'),
+        bold: true,
+        dim: false,
+        used: true,
+      });
     }
     return col + n;
   },
 });
+
+/** The permission mode's colour and short name; an unknown mode keeps the classic yellow. */
+const MODES = {
+  auto: ['#00f0ff', 'AUTO'],
+  plan: ['#b26bff', 'PLAN'],
+  default: ['#ffb000', 'MANUAL'],
+  acceptEdits: ['#05ffa1', 'EDITS'],
+  bypassPermissions: ['#ff003c', 'BYPASS'],
+  dontAsk: ['#ff6b00', 'NO-ASK'],
+};
+const modeColor = mode => (MODES[mode] ? hex(MODES[mode][0]) : CY_YELLOW);
+
+/**
+ * How the stripes look this redraw: red after a failed call; scrolling with a torn
+ * cell while working; a slow breath in the mode's colour at rest.
+ */
+function sigilLook(d) {
+  const now = Date.now();
+  const base = modeColor(d.mode);
+  if (d.hud.failed) return { color: now % 1000 < 500 ? CY_RED : mix(CY_RED, GRID, 0.35), phase: 0, glitch: null };
+  if (d.hud.running) {
+    const t = Math.floor(now / 150);
+    const roll = hash(t);
+    return {
+      color: base,
+      phase: -t,
+      glitch: roll % 3 === 0 ? { line: roll % 2, cell: (roll >> 3) % 4, bits: (roll >> 5) & 0xff } : null,
+    };
+  }
+  const breath = (Math.sin((now / 6000) * 2 * Math.PI) + 1) / 2;
+  return { color: mix(base, GRID, 0.1 + 0.5 * breath), phase: 0, glitch: null };
+}
+
+/** `⎇ main ●3 ↑1`: the branch, files changed, commits not pushed. */
+function cyberGit(git) {
+  const parts = [text('⎇ ', { fg: CY_DIM, raw: true }), text(git.branch, { fg: CY_CYAN, raw: true })];
+  if (git.dirty > 0) parts.push(text(` ●${git.dirty}`, { fg: CY_PINK, bold: true, raw: true }));
+  if (git.ahead > 0) parts.push(text(` ↑${git.ahead}`, { fg: CY_YELLOW, bold: true, raw: true }));
+  return seq(parts, 2);
+}
 
 /** `segs` lit blocks with a dark gap between each, like a combat HUD readout. */
 const segmentItem = (pct, segs, color, prio = 0) => ({
@@ -916,6 +974,7 @@ const TICKS_IDLE = ['// awaiting orders', '// grid quiet', '// standing by', '//
 function cyberTicker(d) {
   const tick = Math.floor(Date.now() / 60000);
   if (d.hud.failed) return '// breach detected';
+  if (d.levelUp) return `// rank up: ${String(d.hud.rep?.title || 'new tier').toLowerCase()}`;
   if ((d.ctx ?? 0) >= 80) return '// neural overload imminent';
   if ((d.usage?.pct ?? 0) >= 80) return '// ICE closing in';
   if (d.hud.running) return TICKS_LIVE[tick % TICKS_LIVE.length];
@@ -924,64 +983,96 @@ function cyberTicker(d) {
   return TICKS_IDLE[tick % TICKS_IDLE.length];
 }
 
-function renderCyberpunk(d, cols) {
-  // line 1: identity and the two meters
-  const top = makeCanvas(cols, () => GRID);
-  const where = [hazardItem(4, 0), text(' '), nameplate(d.model)];
-  const topLeft = [seq(where, 0), effortItem(d, 'cyber')];
-  if (d.folder) topLeft.push(text(`//${d.folder}`, { fg: CY_CYAN, raw: true }, 3));
-  if (d.git) {
-    topLeft.push(
-      d.git.dirty > 0
-        ? text(`UNSYNCED ±${d.git.dirty}`, { fg: CY_PINK, bold: true, raw: true }, 2)
-        : text(`BR:${d.git.branch}`, { fg: CY_DIM, raw: true }, 4),
-    );
+/**
+ * Two lines laid out as one grid: each column holds a top and a bottom item and
+ * is as wide as the wider of the two, so the lines stay aligned. Columns are
+ * dropped whole (lowest priority first) when the line is too narrow.
+ */
+function gridRows(top, bottom, left, right, gap = 3) {
+  const width = c => Math.max(c.top?.w ?? 0, c.bottom?.w ?? 0);
+  let l = left.filter(c => c.top || c.bottom);
+  let r = right.filter(c => c.top || c.bottom);
+  const total = () =>
+    l.reduce((n, c) => n + width(c), 0) + Math.max(0, l.length - 1) * gap +
+    r.reduce((n, c) => n + width(c), 0) + Math.max(0, r.length - 1) * gap + 2 + (r.length ? gap : 0);
+  while (total() > top.length && l.length + r.length > 1) {
+    const worst = Math.max(...l.map(c => c.prio), ...r.map(c => c.prio));
+    const inR = r.findLastIndex(c => c.prio === worst);
+    if (inR >= 0) r.splice(inR, 1);
+    else l.splice(l.findLastIndex(c => c.prio === worst), 1);
   }
-  layout(top, topLeft, [
-    d.ctx !== null ? { ...cyberMeter('NEURAL', d.ctx, CY_PINK), prio: 1 } : null,
-    d.usage ? { ...cyberMeter('BANDWIDTH', d.usage.pct, CY_CYAN), prio: 2 } : null,
-    resetText(d.usage) ? text(`REBOOT ${duration(d.usage.resetsIn)}`, { fg: CY_DIM, raw: true }, 5) : null,
-  ], 3);
+  const paintRow = (cv, which) => {
+    let col = 1;
+    for (const c of l) {
+      c[which]?.paint(cv, col);
+      col += width(c) + gap;
+    }
+    col = top.length - 1 - (r.reduce((n, c) => n + width(c), 0) + Math.max(0, r.length - 1) * gap);
+    for (const c of r) {
+      // right columns hug their right edge, so short items line up on the right
+      const item = c[which];
+      if (item) item.paint(cv, col + width(c) - item.w);
+      col += width(c) + gap;
+    }
+  };
+  paintRow(top, 'top');
+  paintRow(bottom, 'bottom');
+}
 
-  // line 2: link state, net traffic, ticker and readouts
+function renderCyberpunk(d, cols) {
+  const top = makeCanvas(cols, () => GRID);
   const bottom = makeCanvas(cols, () => GRID);
-  const state = d.hud.running
-    ? text('◢ JACKED IN 接続中', { fg: CY_GREEN, bold: true, raw: true }, 0)
-    : text('◣ STANDBY 待機', { fg: CY_DIM, raw: true }, 0);
-  const traffic = d.hud.activity.length > 0
-    ? seq([text('NET ', { fg: CY_DIM, raw: true }), netTrafficItem(d.hud.activity, 24)], 3)
-    : d.samples.length > 1
-      ? seq([text('TRACE ', { fg: CY_DIM, raw: true }), text(sparkChars(d.samples.map(s => s[1]), 16), { fg: CY_PINK, raw: true })], 4)
-      : null;
+  const look = sigilLook(d);
+  const link = d.hud.running
+    ? text('◢ JACKED IN 接続中', { fg: CY_GREEN, bold: true, raw: true })
+    : text('◣ STANDBY 待機', { fg: CY_DIM, raw: true });
+  const mode = MODES[d.mode]
+    ? seq([text('MODE ', { fg: CY_DIM, raw: true }), text(MODES[d.mode][1], { fg: modeColor(d.mode), bold: true, raw: true })])
+    : null;
   const elapsed = d.cost?.total_duration_ms;
-  const added = d.cost?.total_lines_added;
-  const removed = d.cost?.total_lines_removed;
-  const credits = d.cost?.total_cost_usd;
-  const daemons = d.hud.daemons.slice(0, 2).map(dm =>
-    seq([
-      text('DAEMON·', { fg: CY_DIM, raw: true }),
-      text(String(dm.name).slice(0, 18), { fg: CY_GREEN, raw: true }),
-      text(` ${duration(Date.now() - dm.started)}`, { fg: CY_DIM, raw: true }),
-    ], 4),
-  );
-  layout(bottom, [seq([hazardItem(4, 1), text(' '), state], 0), traffic, text(cyberTicker(d), { fg: mix(CY_PINK, GRID, 0.25), raw: true }, 7)], [
-    d.hud.failed ? text('⚠ BREACH // LAST CALL FAILED', { fg: CY_RED, bold: true, raw: true }, 1) : null,
-    ...effItems(d, 'cyber'),
-    ...daemons,
-    d.hud.calls !== null ? seq([text('OPS ', { fg: CY_DIM, raw: true }), text(String(d.hud.calls), { fg: CY_YELLOW, bold: true, raw: true })], 3) : null,
-    d.hud.rep
-      ? seq([text('REP ', { fg: CY_DIM, raw: true }), text(`${d.hud.rep.points} LV${d.hud.rep.level}`, { fg: CY_PINK, bold: true, raw: true }), d.hud.rep.streak > 1 ? text(` ${d.hud.rep.streak}d`, { fg: CY_YELLOW, raw: true }) : text('')], 4)
-      : null,
-    // the session's credits, unless the budget chip already shows today's
-    typeof credits === 'number' && credits > 0 && !d.hud.budget?.usdPerDay
-      ? seq([text('₵ ', { fg: CY_YELLOW, raw: true }), text(credits.toFixed(2), { fg: CY_YELLOW, bold: true, raw: true })], 5)
-      : null,
-    typeof added === 'number'
-      ? seq([text(`+${added}`, { fg: CY_GREEN, raw: true }), text(`/-${removed ?? 0}`, { fg: CY_PINK, raw: true }), text(' LOC', { fg: CY_DIM, raw: true })], 6)
-      : null,
-    typeof elapsed === 'number' ? seq([text('UPTIME ', { fg: CY_DIM, raw: true }), text(clock(elapsed), { fg: CY_CYAN, bold: true, raw: true })], 2) : null,
-    d.sessionId ? text(`ID:${d.sessionId.replace(/-/g, '').slice(0, 8).toUpperCase()}`, { fg: CY_DIM, raw: true }, 8) : null,
-  ], 3);
+  const daemon = d.hud.daemons[0]
+    ? seq([
+        text('DAEMON·', { fg: CY_DIM, raw: true }),
+        text(String(d.hud.daemons[0].name).slice(0, 18), { fg: CY_GREEN, raw: true }),
+        text(` ${duration(Date.now() - d.hud.daemons[0].started)}`, { fg: CY_DIM, raw: true }),
+      ])
+    : null;
+  // warnings that matter now: a breach, a limit coming before its reset, the budget
+  const alerts = [
+    d.hud.failed ? text('⚠ BREACH', { fg: CY_RED, bold: true, raw: true }) : null,
+    ...effItems(d, 'cyber').filter(item => !item.isCache),
+  ].filter(Boolean);
+  const alert = alerts.length ? seq(alerts.flatMap((a, i) => (i ? [text('  '), a] : [a]))) : null;
+  const rep = d.levelUp
+    ? text(` ▲ LV${d.hud.rep.level} UNLOCKED `, {
+        fg: GRID,
+        bg: Math.floor(Date.now() / 700) % 2 ? CY_YELLOW : CY_PINK,
+        bold: true,
+        raw: true,
+      })
+    : d.hud.rep
+      ? seq([
+          text('REP ', { fg: CY_DIM, raw: true }),
+          text(`${d.hud.rep.points} LV${d.hud.rep.level}`, { fg: CY_PINK, bold: true, raw: true }),
+          d.hud.rep.streak > 1 ? text(` ${d.hud.rep.streak}d`, { fg: CY_YELLOW, raw: true }) : text(''),
+        ])
+      : null;
+
+  gridRows(top, bottom, [
+    // identity: who, and whether Claude is working
+    { prio: 0, top: seq([hazardItem(4, 0, look), text(' '), nameplate(d.model)]), bottom: seq([hazardItem(4, 1, look), text(' '), link]) },
+    // how hard it thinks, and the permission mode
+    { prio: 2, top: effortItem(d, 'cyber'), bottom: mode },
+    // where, and the ticker
+    { prio: 4, top: d.folder ? text(`//${d.folder}`, { fg: CY_CYAN, raw: true }) : null, bottom: text(cyberTicker(d), { fg: mix(CY_PINK, GRID, 0.25), raw: true }) },
+    // git, and the traffic of the last minutes
+    { prio: 6, top: d.git ? cyberGit(d.git) : null, bottom: d.hud.activity.length > 0 ? seq([text('NET ', { fg: CY_DIM, raw: true }), netTrafficItem(d.hud.activity, 16)]) : null },
+  ], [
+    { prio: 1, top: d.ctx !== null ? cyberMeter('NEURAL', d.ctx, CY_PINK) : null, bottom: rep },
+    { prio: 2, top: d.usage ? cyberMeter('BANDWIDTH', d.usage.pct, CY_CYAN) : null, bottom: typeof elapsed === 'number' ? seq([text('UPTIME ', { fg: CY_DIM, raw: true }), text(clock(elapsed), { fg: CY_CYAN, bold: true, raw: true })]) : null },
+    // a live warning keeps its column even on a narrow terminal
+    { prio: alert ? 0 : 3, top: resetText(d.usage) ? text(`REBOOT ${duration(d.usage.resetsIn)}`, { fg: CY_DIM, raw: true }) : null, bottom: alert ?? daemon },
+  ]);
 
   return `${renderCanvas(top)}\n${renderCanvas(bottom)}`;
 }
@@ -1013,15 +1104,19 @@ const cwd = input.workspace?.project_dir || input.workspace?.current_dir || inpu
 const cache = readJson(join(DIR, 'cache.json'), {});
 const ctx = contextPercent(input);
 const u = usage(input);
+const hud = hudState();
 const data = {
   hour: Number.isFinite(hour) ? hour : 12,
   model: modelName(input),
   folder: cwd ? basename(cwd.replace(/[\\/]+$/, '')) : '',
-  git: process.env.POLISH_NO_GIT ? null : gitInfo(cwd, cache),
+  // the folder Claude is working in can be a repo even when the project folder is not
+  git: process.env.POLISH_NO_GIT ? null : gitInfo(input.workspace?.current_dir || cwd, cache),
+  mode: process.env.POLISH_MODE ?? (typeof input.permission_mode === 'string' && input.permission_mode ? input.permission_mode : hud.mode),
   ctx,
   usage: u,
   cost: input.cost ?? null,
-  hud: hudState(),
+  hud,
+  levelUp: process.env.POLISH_LEVEL_UP ? Number(process.env.POLISH_LEVEL_UP) : levelUp(cache, hud.rep),
   samples: history(cache, input.session_id, ctx, u ? u.pct : -1),
   sessionId: typeof input.session_id === 'string' ? input.session_id : '',
   cacheHit: typeof input.prompt_cache?.hit_ratio === 'number' ? input.prompt_cache.hit_ratio : null,
