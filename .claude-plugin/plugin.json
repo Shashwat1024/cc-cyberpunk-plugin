@@ -1,0 +1,8 @@
+{
+  "name": "cc-cyberpunk-plugin",
+  "version": "0.1.0",
+  "description": "A cyberpunk HUD for Claude Code: seven status line styles, a live activity line, neon tool rows, a cyberdeck session pane, efficiency tracking (pacing, spend, cache, context hogs, slowest tools, activity heatmap) and desktop themes.",
+  "author": { "name": "Shashwat1024" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

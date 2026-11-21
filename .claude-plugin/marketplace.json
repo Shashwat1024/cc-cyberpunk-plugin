@@ -1,0 +1,6 @@
+{
+  "name": "cc-cyberpunk-plugin",
+  "owner": { "name": "Shashwat1024" },
+  "description": "A cyberpunk HUD for Claude Code",
+  "plugins": [{ "name": "cc-cyberpunk-plugin", "source": "./" }]
+}
